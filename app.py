@@ -9,7 +9,9 @@ import datetime
 import pandas as pd
 import json
 import uuid
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+import zipfile
+import re
 
 # ==========================================
 # 0. 초기 설정 및 디렉토리 관리
@@ -25,7 +27,7 @@ for folder in [ARCHIVE_DIR, IMAGE_DIR]:
         os.makedirs(folder, exist_ok=True)
 
 if not os.path.exists(DATA_FILE):
-    df_empty = pd.DataFrame(columns=["id", "date", "school", "grade", "event_name", "location", "tone", "keywords", "title", "content", "images"])
+    df_empty = pd.DataFrame(columns=["id", "date", "school", "grade", "event_name", "location", "tone", "keywords", "title", "content", "images", "hashtags"])
     df_empty.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
 
 # 한글 폰트 설정
@@ -158,13 +160,15 @@ def apply_custom_style():
             border-right: 2px solid #FFEBB3 !important;
         }
 
-        /* 9. [NEW] 전문 기사 포맷 전용 스타일 */
+        /* 9. [NEW] 전문 기사 포맷 전용 스타일 (Compact) */
         .article-card {
             background: white;
             border-radius: 20px;
-            padding: 30px;
+            padding: 35px;
             border: 1px solid #FFE0B3;
             box-shadow: 0 10px 40px rgba(0,0,0,0.02);
+            max-width: 850px; /* 너무 퍼지지 않게 제한 */
+            margin: 0 auto;
         }
         .article-header {
             margin-bottom: 25px;
@@ -172,10 +176,10 @@ def apply_custom_style():
             padding-bottom: 20px;
         }
         .article-title {
-            font-size: 2rem !important;
+            font-size: 1.8rem !important; /* 살짝 축소 */
             font-weight: 800 !important;
             color: #E67E30 !important;
-            margin-bottom: 15px !important;
+            margin-bottom: 12px !important;
             line-height: 1.3 !important;
         }
         .badge-container {
@@ -186,9 +190,9 @@ def apply_custom_style():
         .badge {
             background: #FFF2E6;
             color: #FF8C42;
-            padding: 5px 15px;
+            padding: 4px 12px;
             border-radius: 50px;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-weight: 600;
             display: flex;
             align-items: center;
@@ -196,29 +200,32 @@ def apply_custom_style():
             border: 1px solid #FFE4CC;
         }
         .article-content {
-            font-size: 1.1rem !important;
-            line-height: 1.8 !important;
+            font-size: 1.05rem !important;
+            line-height: 1.7 !important;
             color: #4A4A4A !important;
             white-space: pre-wrap;
         }
-        /* 이미지 그리드 시스템 */
+        /* 이미지 그리드 시스템 (크기 최적화) */
         .img-grid {
             display: grid;
             gap: 12px;
-            margin: 20px 0;
+            margin: 25px 0;
+            max-width: 750px;
+            margin-left: auto;
+            margin-right: auto;
         }
         .img-item {
             width: 100%;
-            height: 250px;
+            height: 220px; /* 이미지 높이 축소 */
             object-fit: cover;
             border-radius: 12px;
             border: 1px solid #FFE0B3;
         }
         .grid-1 { grid-template-columns: 1fr; }
-        .grid-1 .img-item { height: 400px; }
+        .grid-1 .img-item { height: 320px; } /* 1장일 때도 너무 크지 않게 */
         .grid-2 { grid-template-columns: 1fr 1fr; }
         .grid-3 { grid-template-areas: "main main" "sub1 sub2"; }
-        .grid-3 .img-item:first-child { grid-area: main; height: 350px; }
+        .grid-3 .img-item:first-child { grid-area: main; height: 300px; }
         .grid-4 { grid-template-columns: 1fr 1fr; }
         </style>
     """, unsafe_allow_html=True)
@@ -266,7 +273,8 @@ def save_to_archive(data, uploaded_files):
         "keywords": data['keywords'],
         "title": data['title'],
         "content": data['content'],
-        "images": json.dumps(image_paths)
+        "images": json.dumps(image_paths),
+        "hashtags": json.dumps(data.get('hashtags', []))
     }
     
     df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
@@ -309,6 +317,7 @@ def generate_article_gemini(api_key, topic_data):
         1. 제목은 매력적으로 뽑아주세요. (첫 줄에 '제목: ' 형식으로)
         2. 본문은 400~600자 내외로 작성하세요.
         3. 문단은 보기 좋게 나누고 이모지를 적절히 사용하여 친근감을 주세요.
+        4. 기사 끝에 관련 해시태그 5개를 작성해주세요. (형식: #태그1 #태그2 ...)
         """
         
         response = model.generate_content(prompt)
@@ -317,14 +326,189 @@ def generate_article_gemini(api_key, topic_data):
         # 파싱
         title = topic_data['event_name']
         content = text
+        hashtags = []
+        
+        # 해시태그 추출 logic
+        found_hashtags = re.findall(r"#(\w+)", text)
+        if found_hashtags:
+            hashtags = found_hashtags[:5]
+            # 텍스트에서 해시태그 부분 제거 (본문에는 깔끔하게만 남기기 위해)
+            # 보통 마지막에 있으므로 마지막 줄 근처 처리
+            lines = text.split('\n')
+            clean_lines = [l for l in lines if not all(word.startswith('#') for word in l.split())]
+            content = '\n'.join(clean_lines).strip()
+
         for line in text.split('\n'):
             if line.startswith("제목:") or line.startswith("##"):
                 title = line.replace("제목:", "").replace("##", "").strip()
-                content = text.replace(line, "").split('\n', 1)[-1].strip()
+                # 이미 content를 위에서 hashtag 제거하며 세팅했으므로 다시 체크
+                temp_content = content.replace(line, "").strip()
+                if temp_content: content = temp_content
                 break
-        return title, content
+                
+        return title, content, hashtags
     except Exception as e:
-        return f"AI 생성 오류", str(e)
+        return f"AI 생성 오류", str(e), []
+
+# ==========================================
+# 3. 로직: 카드뉴스 생성 엔진 (Pillow)
+# ==========================================
+class CardNewsEngine:
+    def __init__(self, theme_name):
+        self.theme = THEMES[theme_name]
+        self.size = (1080, 1080)
+        self.font_path = FONT_PATH
+        
+    def _get_font(self, size, bold=False):
+        # Note: NanumGothic-Regular doesn't have a separate bold file in this setup, 
+        # but we use sized fonts for hierarchy.
+        return ImageFont.truetype(self.font_path, size)
+
+    def _draw_wrapped_text(self, draw, text, position, font, max_width, fill, max_lines=2):
+        words = text.split()
+        lines = []
+        current_line = ""
+        
+        for word in words:
+            test_line = current_line + (" " if current_line else "") + word
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            if bbox[2] - bbox[0] <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+                if len(lines) >= max_lines: break
+        
+        if len(lines) < max_lines:
+            lines.append(current_line)
+        
+        # If still too long, add ellipsis to the last line
+        if len(lines) == max_lines:
+            # Simple check if current_line was truncated or still too long
+            last_line = lines[-1]
+            bbox = draw.textbbox((0, 0), last_line, font=font)
+            if bbox[2] - bbox[0] > max_width - 30:
+                while last_line and draw.textbbox((0, 0), last_line + "...", font=font)[2] > max_width:
+                    last_line = last_line[:-1]
+                lines[-1] = last_line + "..."
+
+        y = position[1]
+        for line in lines:
+            draw.text((position[0], int(y)), line, font=font, fill=fill)
+            y += font.size * 1.4
+        return int(y)
+
+    def create_card(self, title, date, location, grade, hashtags, images):
+        # 1. Canvas Setup (Clean White)
+        canvas = Image.new("RGB", self.size, (255, 255, 255))
+        draw = ImageDraw.Draw(canvas)
+        
+        main_rgb = self.theme["main"]
+        accent_rgb = self.theme["accent"]
+        
+        # 2. Top Header (Profile Context)
+        # 학년 배지 스타일
+        badge_w = 120
+        draw.rounded_rectangle((50, 50, 50 + badge_w, 100), radius=25, fill=main_rgb)
+        draw.text((50 + 20, 60), grade if grade else "소식", font=self._get_font(22), fill=(255, 255, 255))
+        
+        # 학교/날짜 정보
+        draw.text((50 + badge_w + 20, 55), "학교 소식지", font=self._get_font(24), fill=(30, 30, 30))
+        draw.text((50 + badge_w + 20, 85), date, font=self._get_font(18), fill=(150, 150, 150))
+
+        # 3. Main Title
+        title_y = 140
+        next_y = self._draw_wrapped_text(draw, title, (50, title_y), self._get_font(56), 980, (20, 20, 20), max_lines=2)
+        
+        # 4. Location Badge (이미지 바로 위에 배치)
+        loc_y = next_y + 10
+        if location:
+            draw.text((50, loc_y), f"📍 {location}", font=self._get_font(28), fill=accent_rgb)
+            img_y = loc_y + 60
+        else:
+            img_y = loc_y + 20
+
+        # 5. Image Section
+        img_w = 980 # 1000 -> 980 for better side margins
+        img_h = 580 # 650 -> 580 to prevent bottom cutoff
+        img_box = (50, int(img_y), 50 + img_w, int(img_y + img_h))
+        
+        # 박스 테두리 (Shadow 효과 느낌)
+        draw.rectangle((48, int(img_y - 2), 52 + img_w, int(img_y + img_h + 2)), fill=(245, 245, 245))
+        
+        if images:
+            self._render_image_grid(canvas, images, img_box)
+            
+        # 6. Hashtag Section
+        # 이미지 바로 아래에 여백을 줄여서 배치
+        tag_y = img_y + img_h + 30
+        tag_str = " ".join([f"#{t}" for t in hashtags])
+        self._draw_wrapped_text(draw, tag_str, (50, tag_y), self._get_font(34), 980, main_rgb, max_lines=2)
+        
+        # Footer Watermark (더 위로 올림)
+        draw.text((820, 1010), "AI School Story", font=self._get_font(20), fill=(220, 220, 220))
+        
+        return canvas
+
+    def _render_image_grid(self, canvas, image_paths, box):
+        x, y, x2, y2 = box
+        w, h = x2 - x, y2 - y
+        count = len(image_paths)
+        
+        imgs = []
+        for p in image_paths[:4]:
+            try:
+                # Handle both path strings and file-like objects
+                if isinstance(p, str):
+                    imgs.append(Image.open(p))
+                else:
+                    imgs.append(Image.open(io.BytesIO(p.getbuffer()) if hasattr(p, 'getbuffer') else p))
+            except: continue
+            
+        if not imgs: return
+
+        gap = 10
+        if len(imgs) == 1:
+            self._paste_cover(canvas, imgs[0], (x, y, w, h))
+        elif len(imgs) == 2:
+            half_w = (w - gap) // 2
+            self._paste_cover(canvas, imgs[0], (x, y, half_w, h))
+            self._paste_cover(canvas, imgs[1], (x + half_w + gap, y, half_w, h))
+        elif len(imgs) == 3:
+            big_w = (w * 2) // 3
+            small_w = w - big_w - gap
+            half_h = (h - gap) // 2
+            self._paste_cover(canvas, imgs[0], (x, y, big_w, h))
+            self._paste_cover(canvas, imgs[1], (x + big_w + gap, y, small_w, half_h))
+            self._paste_cover(canvas, imgs[2], (x + big_w + gap, y + half_h + gap, small_w, half_h))
+        else: # 4
+            half_w = (w - gap) // 2
+            half_h = (h - gap) // 2
+            self._paste_cover(canvas, imgs[0], (x, y, half_w, half_h))
+            self._paste_cover(canvas, imgs[1], (x + half_w + gap, y, half_w, half_h))
+            self._paste_cover(canvas, imgs[2], (x, y + half_h + gap, half_w, half_h))
+            self._paste_cover(canvas, imgs[3], (x + half_w + gap, y + half_h + gap, half_w, half_h))
+
+    def _paste_cover(self, canvas, img, rect):
+        rx, ry, rw, rh = rect
+        iw, ih = img.size
+        i_aspect = iw / ih
+        r_aspect = rw / rh
+        
+        if i_aspect > r_aspect:
+            new_h = int(rh)
+            new_w = int(rh * i_aspect)
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            left = (new_w - rw) // 2
+            img = img.crop((int(left), 0, int(left + rw), int(rh)))
+        else:
+            new_w = int(rw)
+            new_h = int(rw / i_aspect)
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            top = (new_h - rh) // 2
+            img = img.crop((0, int(top), int(rw), int(top + rh)))
+            
+        canvas.paste(img, (int(rx), int(ry)))
 
 # ==========================================
 # 3. 로직: PDF 생성 엔진
@@ -525,6 +709,24 @@ def main():
         api_key = st.text_input("Gemini API Key", type="password")
         if not api_key:
             st.warning("⚠️ API 키를 입력해야 기능을 사용할 수 있습니다.")
+            with st.expander("🔑 API 키 발급 및 비용 안내", expanded=False):
+                st.markdown("""
+                이 시스템은 Google의 **Gemini 3 Flash** AI 모델을 사용하여 기사와 카드뉴스를 생성합니다.
+                
+                **1. 어디서 가져오나요?**
+                - [Google AI Studio](https://aistudio.google.com/app/apikey)에서 누구나 구글 계정으로 즉시 발급 가능합니다.
+                
+                **2. 비용이 드나요?**
+                - **아니오, 무료입니다.** 개인 개발 및 교육 목적의 무료 티어를 사용하면 별도의 결제 없이 무료로 이용할 수 있습니다.
+                
+                **3. 얼마나 쓸 수 있나요? (한도)**
+                - **분당 15회 / 하루 1,500회** 호출이 가능합니다. 
+                - 학교 소식지를 수십 번 다시 생성하더라도 **전혀 걱정 없이** 넉넉하게 사용할 수 있는 양입니다.
+                
+                **4. 발급 방법**
+                1. [AI Studio](https://aistudio.google.com/app/apikey) 접속 ➔ 'Create API key' 클릭
+                2. 발급된 키를 복사하여 위 칸에 넣어주세요.
+                """)
         else:
             st.success("✅ API 키가 설정되었습니다.")
             
@@ -648,9 +850,9 @@ def main():
             selected_imgs = []
             if img_files:
                 st.write("✅ 기사에 포함할 사진을 선택하세요")
-                cols = st.columns(3)
+                cols = st.columns(5) # 5개 컬럼으로 더 작게 표시
                 for idx, img in enumerate(img_files):
-                    with cols[idx % 3]:
+                    with cols[idx % 5]:
                         st.image(img, use_container_width=True)
                         if st.checkbox(f"사진 {idx+1}", value=True, key=f"img_sel_{idx}"):
                             selected_imgs.append(img)
@@ -673,13 +875,14 @@ def main():
                     "tone": tone,
                     "keywords": keywords
                 }
-                title, content = generate_article_gemini(api_key, input_data)
+                title, content, hashtags = generate_article_gemini(api_key, input_data)
                 
                 st.session_state.draft_title = title
                 st.session_state.draft_content = content
+                st.session_state.draft_hashtags = hashtags
                 st.session_state.current_input_data = input_data
-                # draft_images는 삭제 (저장 시점에 img_files를 직접 참조하도록 변경)
-                st.success("AI 초안이 생성되었습니다! 아래에서 수정 후 보관하세요.")
+                st.session_state.draft_images = selected_imgs
+                st.success("AI 초안이 생성되었습니다! 아래에서 수정 후 카드뉴스를 만들어보세요.")
 
     # 편집 섹션 (초안이 있을 때만 표시)
     if 'draft_title' in st.session_state:
@@ -689,33 +892,93 @@ def main():
             edited_title = st.text_input("📝 기사 제목 수정", value=st.session_state.draft_title)
             edited_content = st.text_area("✍️ 기사 본문 수정", value=st.session_state.draft_content, height=300)
             
-            # 사진 미리보기 (수정 섹션 내)
+            # 사진 미리보기 (더 작고 컴팩트하게)
             if st.session_state.get('draft_images'):
                 st.write("📸 업로드된 사진")
                 imgs = st.session_state.draft_images
-                cols = st.columns(min(len(imgs), 4))
-                for idx, img in enumerate(imgs[:4]):
-                    cols[idx].image(img, use_container_width=True)
+                cols = st.columns(5) # 5개 컬럼 고정으로 사진 크기 축소
+                for idx, img in enumerate(imgs[:5]):
+                    cols[idx % 5].image(img, use_container_width=True)
+            
+            edited_tags = st.text_input("🏷️ 해시태그 (공백으로 구분)", value=" ".join(st.session_state.get('draft_hashtags', [])))
 
-            col_btn1, col_btn2 = st.columns([1, 1])
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
             with col_btn1:
                 if st.button("📥 최종 기사 보관하기", use_container_width=True, type="primary"):
                     final_data = st.session_state.current_input_data
-                    final_data.update({"title": edited_title, "content": edited_content})
-                    # 수정: 사용자가 체크박스로 선택한 사진들만 저장
-                    saved_record = save_to_archive(final_data, selected_imgs) 
-                    
-                    st.toast("최종 기사가 보관소에 저장되었습니다!")
-                    # 상태 초기화 및 즉시 보기 모드 전환
+                    final_data.update({
+                        "title": edited_title, 
+                        "content": edited_content,
+                        "hashtags": [t.strip() for t in edited_tags.split() if t.strip()]
+                    })
+                    save_to_archive(final_data, st.session_state.get('draft_images', []))
+                    st.toast("저장되었습니다!")
                     del st.session_state.draft_title
-                    del st.session_state.draft_content
-                    st.session_state.current_view = saved_record # 방금 저장한 기사를 즉시 표시
                     st.rerun()
+            
             with col_btn2:
+                if st.button("🖼️ 카드뉴스 제작", use_container_width=True):
+                    with st.spinner("요약 카드 생성 중..."):
+                        engine = CardNewsEngine(selected_theme)
+                        tags = [t.strip() for t in edited_tags.split() if t.strip()]
+                        
+                        temp_imgs = []
+                        for img_file in st.session_state.get('draft_images', []):
+                            tmp_path = f"tmp_{uuid.uuid4()}.png"
+                            with open(tmp_path, "wb") as f:
+                                f.write(img_file.getbuffer())
+                            temp_imgs.append(tmp_path)
+                        
+                        # date 객체 또는 문자열 대응
+                        input_info = st.session_state.current_input_data
+                        raw_date = input_info['date']
+                        if hasattr(raw_date, 'strftime'):
+                            date_str = raw_date.strftime("%Y-%m-%d")
+                        else:
+                            date_str = str(raw_date)
+                            
+                        # 모든 메타데이터 포함하여 생성
+                        summary_card = engine.create_card(
+                            title=edited_title, 
+                            date=date_str, 
+                            location=input_info.get('location', ''),
+                            grade=input_info.get('grade', ''),
+                            hashtags=tags, 
+                            images=temp_imgs
+                        )
+                            
+                        for p in temp_imgs:
+                            if os.path.exists(p): os.remove(p)
+                            
+                        st.session_state.preview_cards = [summary_card]
+                        st.session_state.p_idx = 0
+            
+            with col_btn3:
                 if st.button("❌ 취소 및 삭제", use_container_width=True):
                     del st.session_state.draft_title
-                    del st.session_state.draft_content
                     st.rerun()
+
+        # 카드뉴스 미리보기 UI (컬럼으로 크기 제한)
+        if 'preview_cards' in st.session_state:
+            st.markdown("---")
+            st.subheader("🖼️ 카드뉴스 요약 카드")
+            
+            # 중앙 배치를 위해 3개 컬럼 사용 (좌우 여백 확보)
+            _, col_mid, _ = st.columns([0.5, 1, 0.5])
+            with col_mid:
+                p_cards = st.session_state.preview_cards
+                # Single Card Display
+                st.image(p_cards[0], use_container_width=True)
+                
+                c_dl, c_close = st.columns(2)
+                with c_dl:
+                    img_io = io.BytesIO()
+                    p_cards[0].save(img_io, format='PNG')
+                    st.download_button("📥 PNG 다운로드", img_io.getvalue(), "card_news.png", "image/png", use_container_width=True)
+                with c_close:
+                    if st.button("✖️ 미리보기 닫기", use_container_width=True, key="close_preview_edit"):
+                        del st.session_state.preview_cards
+                        st.rerun()
 
     # 결과물 표시 및 개별 조회 화면
     if 'current_view' in st.session_state:
@@ -792,6 +1055,80 @@ def main():
             
             st.markdown(article_card_html, unsafe_allow_html=True)
             st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- 카드뉴스 및 공유/다운로드 영역 ---
+            with st.container(border=True):
+                st.markdown("### 🛠️ 추가 도구")
+                col_tool1, col_tool2, col_tool3 = st.columns(3)
+                
+                with col_tool1:
+                    if st.button("🖼️ 이 기사로 카드뉴스 만들기", use_container_width=True, type="primary"):
+                        with st.spinner("요약 카드 생성 중..."):
+                            engine = CardNewsEngine(selected_theme)
+                            # 안전한 해시태그 파싱
+                            tags_raw = v.get('hashtags', '[]')
+                            try:
+                                tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+                            except:
+                                tags = []
+                            
+                            if not isinstance(tags, list): tags = []
+                            
+                            # 모든 메타데이터 포함하여 생성
+                            summary_card = engine.create_card(
+                                title=v['title'], 
+                                date=v['date'], 
+                                location=v.get('location', ''),
+                                grade=v.get('grade', ''),
+                                hashtags=tags, 
+                                images=imgs
+                            )
+                            
+                            st.session_state.preview_cards = [summary_card]
+                            st.session_state.p_idx = 0
+                
+                with col_tool2:
+                    # 공유용 텍스트 (안전하게 해시태그 처리)
+                    tags_raw_v = v.get('hashtags', '[]')
+                    try:
+                        tags_v = json.loads(tags_raw_v) if isinstance(tags_raw_v, str) else tags_raw_v
+                    except:
+                        tags_v = []
+                    if not isinstance(tags_v, list): tags_v = []
+                    
+                    tag_line = ' '.join([f'#{t}' for t in tags_v])
+                    share_text = f"[{v['school']}] {v['title']}\n📅 일시: {v['date']}\n🏫 장소: {v['location']}\n\n{v['content'][:150]}...\n\n{tag_line}"
+                    st.text_area("🔗 공유용 텍스트 (복사 가능)", value=share_text, height=100)
+                
+                with col_tool3:
+                    # 개별 기사 PDF 다운로드 (임시 지원)
+                    pdf_single = PDFEngine(selected_theme, school_name)
+                    pdf_single.add_page()
+                    pdf_single.add_article(v)
+                    pdf_bytes = bytes(pdf_single.output(dest='S'))
+                    st.download_button("📥 기사 PDF 다운로드", pdf_bytes, f"article_{v['id'][:8]}.pdf", "application/pdf", use_container_width=True)
+
+            # 카드뉴스 미리보기 UI (컬럼으로 크기 제한)
+            if 'preview_cards' in st.session_state:
+                st.markdown("---")
+                st.subheader("🖼️ 생성된 카드뉴스")
+                
+                _, col_mid_v, _ = st.columns([0.5, 1, 0.5])
+                with col_mid_v:
+                    p_cards = st.session_state.preview_cards
+                    st.image(p_cards[0], use_container_width=True)
+                    
+                    c_zip, c_cls = st.columns(2)
+                    with c_zip:
+                        img_io = io.BytesIO()
+                        p_cards[0].save(img_io, format='PNG')
+                        st.download_button("📥 PNG 다운로드", img_io.getvalue(), "card_news.png", "image/png", use_container_width=True)
+                    with c_cls:
+                        if st.button("✖️ 카드뉴스 닫기", use_container_width=True, key="close_preview_view"):
+                            del st.session_state.preview_cards
+                            st.rerun()
+
+            st.markdown("<br>", unsafe_allow_html=True)
             col_ctrl1, col_ctrl2 = st.columns(2)
             if col_ctrl1.button("✏️ 기사 수정하기", use_container_width=True):
                 st.session_state.is_editing = True
@@ -799,6 +1136,7 @@ def main():
             if col_ctrl2.button("✖️ 조회창 닫기", use_container_width=True):
                 del st.session_state.current_view
                 if 'is_editing' in st.session_state: del st.session_state.is_editing
+                if 'preview_cards' in st.session_state: del st.session_state.preview_cards
                 st.rerun()
 
 if __name__ == "__main__":
