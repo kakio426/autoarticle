@@ -157,6 +157,69 @@ def apply_custom_style():
             background-color: #FFF9E6 !important;
             border-right: 2px solid #FFEBB3 !important;
         }
+
+        /* 9. [NEW] 전문 기사 포맷 전용 스타일 */
+        .article-card {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid #FFE0B3;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.02);
+        }
+        .article-header {
+            margin-bottom: 25px;
+            border-bottom: 2px solid #FFF5E6;
+            padding-bottom: 20px;
+        }
+        .article-title {
+            font-size: 2rem !important;
+            font-weight: 800 !important;
+            color: #E67E30 !important;
+            margin-bottom: 15px !important;
+            line-height: 1.3 !important;
+        }
+        .badge-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .badge {
+            background: #FFF2E6;
+            color: #FF8C42;
+            padding: 5px 15px;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            border: 1px solid #FFE4CC;
+        }
+        .article-content {
+            font-size: 1.1rem !important;
+            line-height: 1.8 !important;
+            color: #4A4A4A !important;
+            white-space: pre-wrap;
+        }
+        /* 이미지 그리드 시스템 */
+        .img-grid {
+            display: grid;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        .img-item {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+            border-radius: 12px;
+            border: 1px solid #FFE0B3;
+        }
+        .grid-1 { grid-template-columns: 1fr; }
+        .grid-1 .img-item { height: 400px; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-areas: "main main" "sub1 sub2"; }
+        .grid-3 .img-item:first-child { grid-area: main; height: 350px; }
+        .grid-4 { grid-template-columns: 1fr 1fr; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -208,7 +271,17 @@ def save_to_archive(data, uploaded_files):
     
     df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
     df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
-    return new_data  # ID 대신 데이터 전체를 반환하여 즉시 활용 가능하게 수정
+    return new_data
+
+def update_archive(target_id, updated_title, updated_content):
+    df = pd.read_csv(DATA_FILE, encoding='utf-8-sig')
+    idx = df[df['id'] == target_id].index
+    if not idx.empty:
+        df.loc[idx, 'title'] = updated_title
+        df.loc[idx, 'content'] = updated_content
+        df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
+        return True
+    return False
 
 # ==========================================
 # 2. 로직: AI 기사 작성 (Gemini)
@@ -647,25 +720,85 @@ def main():
     # 결과물 표시 및 개별 조회 화면
     if 'current_view' in st.session_state:
         st.markdown("---")
-        st.subheader(f"🔍 기록 기록 조회: {st.session_state.current_view.get('event_name', '상세 내용')}")
-        with st.container(border=True):
-            v = st.session_state.current_view
-            st.header(v['title'])
-            st.write(f"**일시:** {v['date']} | **장소:** {v['location']} | **대상:** {v['grade']}")
-            
-            # 이미지 표시 로직 개선
+        v = st.session_state.current_view
+        is_editing = st.session_state.get('is_editing', False)
+        
+        if is_editing:
+            st.subheader(f"📝 기사 수정하기: {v.get('event_name', '')}")
+            with st.container(border=True):
+                new_title = st.text_input("📝 제목 수정", value=v['title'])
+                st.write(f"**일시:** {v['date']} | **장소:** {v['location']} | **대상:** {v['grade']}")
+                new_content = st.text_area("✍️ 본문 수정", value=v['content'], height=400)
+                
+                c1, c2 = st.columns(2)
+                if c1.button("💾 변경사항 저장", use_container_width=True, type="primary"):
+                    if update_archive(v['id'], new_title, new_content):
+                        st.session_state.current_view['title'] = new_title
+                        st.session_state.current_view['content'] = new_content
+                        st.session_state.is_editing = False
+                        st.success("수정사항이 저장되었습니다.")
+                        st.rerun()
+                if c2.button("🔙 취소", use_container_width=True):
+                    st.session_state.is_editing = False
+                    st.rerun()
+        else:
+            # 전문 매거진 스타일 레이아웃 (HTML/CSS 사용)
+            import base64
+            import textwrap
+
+            def get_base64_img(path):
+                try:
+                    with open(path, "rb") as f:
+                        data = base64.b64encode(f.read()).decode()
+                        return f"data:image/png;base64,{data}"
+                except: return ""
+
             imgs_raw = v.get('images', '[]')
             imgs = json.loads(imgs_raw) if isinstance(imgs_raw, str) else imgs_raw
-            if imgs:
-                cols = st.columns(min(len(imgs), 3))
-                for idx, img_p in enumerate(imgs[:3]):
-                    try:
-                        cols[idx].image(img_p, use_container_width=True)
-                    except: pass
             
-            st.write(v['content'])
-            if st.button("조회창 닫기"):
+            # 메타데이터 배지 HTML 생성
+            badges_html = textwrap.dedent(f"""
+                <div class="badge-container">
+                    <div class="badge">📅 {v['date']}</div>
+                    <div class="badge">🏫 {v['location']}</div>
+                    <div class="badge">🎓 {v['grade']}</div>
+                </div>
+            """).strip()
+            
+            # 이미지 그리드 HTML 생성
+            img_html = ""
+            if imgs:
+                img_count = min(len(imgs), 4)
+                grid_class = f"grid-{img_count}"
+                img_items_html = ""
+                for i in range(img_count):
+                    b64 = get_base64_img(imgs[i])
+                    if b64:
+                        img_items_html += f'<img src="{b64}" class="img-item">'
+                
+                img_html = f'<div class="img-grid {grid_class}">{img_items_html}</div>'
+
+            # 기사 전체 렌더링 (인덴트 제거하여 마크다운 코드블록 방지)
+            article_card_html = textwrap.dedent(f"""
+                <div class="article-card">
+                    <div class="article-header">
+                        <div class="article-title">{v['title']}</div>
+                        {badges_html}
+                    </div>
+                    {img_html}
+                    <div class="article-content">{v['content']}</div>
+                </div>
+            """).strip()
+            
+            st.markdown(article_card_html, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_ctrl1, col_ctrl2 = st.columns(2)
+            if col_ctrl1.button("✏️ 기사 수정하기", use_container_width=True):
+                st.session_state.is_editing = True
+                st.rerun()
+            if col_ctrl2.button("✖️ 조회창 닫기", use_container_width=True):
                 del st.session_state.current_view
+                if 'is_editing' in st.session_state: del st.session_state.is_editing
                 st.rerun()
 
 if __name__ == "__main__":
