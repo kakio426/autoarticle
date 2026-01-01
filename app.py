@@ -1,57 +1,28 @@
 import streamlit as st
 import google.generativeai as genai
-from fpdf import FPDF
-from docx import Document
-import io
 import os
-import requests
+import json
+import re
+import uuid
 import datetime
 import pandas as pd
-import json
-import uuid
+import io
 from PIL import Image, ImageDraw, ImageFont
-import zipfile
-import re
 
-# ==========================================
-# 0. 초기 설정 및 디렉토리 관리
-# ==========================================
-st.set_page_config(layout="wide", page_title="AutoSchoolArticle: 학교 소식지 자동화")
+from engines.pdf_engine import PDFEngine
+from engines.word_engine import WordEngine
+from engines.ppt_engine import PPTEngine
+from engines.rag_service import StyleRAGService
+from engines.db_service import DatabaseService
+from engines.constants import THEMES, FONT_PATH
 
-ARCHIVE_DIR = "archive"
-IMAGE_DIR = os.path.join(ARCHIVE_DIR, "images")
-DATA_FILE = os.path.join(ARCHIVE_DIR, "data.csv")
+# 설정값
+DATA_FILE = "article_archive.csv"
+IMAGE_DIR = "uploaded_images"
 
-for folder in [ARCHIVE_DIR, IMAGE_DIR]:
-    if not os.path.exists(folder):
-        os.makedirs(folder, exist_ok=True)
-
-if not os.path.exists(DATA_FILE):
-    df_empty = pd.DataFrame(columns=["id", "date", "school", "grade", "event_name", "location", "tone", "keywords", "title", "content", "images", "hashtags"])
-    df_empty.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
-
-# 한글 폰트 설정
-FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
-FONT_PATH = "NanumGothic-Regular.ttf"
-
-def ensure_font():
-    if not os.path.exists(FONT_PATH):
-        try:
-            response = requests.get(FONT_URL)
-            with open(FONT_PATH, "wb") as f:
-                f.write(response.content)
-        except:
-            pass
-
-ensure_font()
-
-# 디자인 테마 (컬러칩 미리보기용 데이터 포함)
-THEMES = {
-    "웜 & 플레이풀": {"main": (255, 140, 66), "sub": (255, 251, 240), "accent": (6, 214, 160), "hex": "#FF8C42"},
-    "꿈꾸는 파랑": {"main": (0, 80, 150), "sub": (230, 240, 255), "accent": (0, 120, 215), "hex": "#005096"},
-    "발랄한 노랑": {"main": (255, 180, 0), "sub": (255, 250, 230), "accent": (255, 140, 0), "hex": "#FFB400"},
-    "산뜻한 민트": {"main": (0, 168, 107), "sub": (235, 250, 245), "accent": (0, 128, 90), "hex": "#00A86B"}
-}
+# 폴더 생성
+if not os.path.exists(IMAGE_DIR):
+    os.makedirs(IMAGE_DIR)
 
 def apply_custom_style():
     st.markdown("""
@@ -247,15 +218,20 @@ def show_stepper(step_idx):
 # ==========================================
 # 1. 로직: 아카이브 관리
 # ==========================================
+# ==========================================
+# 1. 로직: 아카이브 관리 (SQLite 기반)
+# ==========================================
+DB = DatabaseService()
+# Initial migration
+if os.path.exists(DATA_FILE):
+    DB.migrate_from_csv(DATA_FILE)
+
 def save_to_archive(data, uploaded_files):
-    df = pd.read_csv(DATA_FILE, encoding='utf-8-sig')
-    
     # 이미지 저장
     image_paths = []
     if uploaded_files:
         for file in uploaded_files:
             img_id = str(uuid.uuid4())
-            # Handle both Streamlit UploadedFile and potential local paths
             ext = file.name.split('.')[-1] if hasattr(file, 'name') else 'png'
             file_path = os.path.join(IMAGE_DIR, f"{img_id}.{ext}")
             with open(file_path, "wb") as f:
@@ -277,24 +253,19 @@ def save_to_archive(data, uploaded_files):
         "hashtags": json.dumps(data.get('hashtags', []))
     }
     
-    df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-    df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
+    DB.save_article(new_data)
     return new_data
 
 def update_archive(target_id, updated_title, updated_content):
-    df = pd.read_csv(DATA_FILE, encoding='utf-8-sig')
-    idx = df[df['id'] == target_id].index
-    if not idx.empty:
-        df.loc[idx, 'title'] = updated_title
-        df.loc[idx, 'content'] = updated_content
-        df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
-        return True
-    return False
+    return DB.update_article(target_id, updated_title, updated_content)
 
 # ==========================================
 # 2. 로직: AI 기사 작성 (Gemini)
 # ==========================================
-def generate_article_gemini(api_key, topic_data):
+# ==========================================
+# 2. 로직: AI 기사 작성 (Gemini) + RAG Style
+# ==========================================
+def generate_article_gemini(api_key, topic_data, style_service=None):
     if not api_key:
         return "API 키가 필요합니다.", "사이드바에 API 키를 입력해주세요."
     
@@ -303,6 +274,18 @@ def generate_article_gemini(api_key, topic_data):
         # 최신 고성능 Flash 모델 설정 (Gemini 3 Flash Preview - 2025.12 출시)
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
+        # Style RAG Injection
+        style_prompt = ""
+        if style_service:
+            # Simple query based on tone and event name
+            query = f"{topic_data['tone']} {topic_data['event_name']}"
+            examples = style_service.retrieve_style_examples(query)
+            if examples:
+                 style_prompt = "\n\n[학교별 맞춤 스타일 참고 (이전에 사용자가 수정한 내역)]:\n"
+                 for i, ex in enumerate(examples):
+                     style_prompt += f"예시 {i+1} (교정된 표현):\n{ex['corrected']}\n...\n"
+                 style_prompt += "\n위의 예시 '교정된 표현'들에서 느껴지는 어투, 단어 선택, 문장 길이를 적극 반영해주세요.\n"
+
         prompt = f"""
         당신은 {topic_data['school']}의 전문 학교 소식지 에디터입니다.
         다음 정보를 바탕으로 생동감 있고 따뜻한 어조의 {topic_data['tone']} 기사를 작성해주세요.
@@ -312,12 +295,14 @@ def generate_article_gemini(api_key, topic_data):
         장소: {topic_data['location']}
         일시: {topic_data['date']}
         주요 키워드: {topic_data['keywords']}
-        
+        {style_prompt}
         요구사항:
         1. 제목은 매력적으로 뽑아주세요. (첫 줄에 '제목: ' 형식으로)
         2. 본문은 400~600자 내외로 작성하세요.
-        3. 문단은 보기 좋게 나누고 이모지를 적절히 사용하여 친근감을 주세요.
-        4. 기사 끝에 관련 해시태그 5개를 작성해주세요. (형식: #태그1 #태그2 ...)
+        3. 학교 소식에 어울리는 정중하면서도 따뜻한 어투를 유지하세요.
+        4. 문단은 보기 좋게 나누고 이모지를 적절히 사용하여 친근감을 주세요.
+        5. 기사 끝에 관련 해시태그 5개를 작성해주세요. (형식: #태그1 #태그2 ...)
+        6. 선정적이거나 부정적인 표현은 배제하고 긍정적인 교육적 가치를 강조하세요.
         """
         
         response = model.generate_content(prompt)
@@ -349,6 +334,42 @@ def generate_article_gemini(api_key, topic_data):
         return title, content, hashtags
     except Exception as e:
         return f"AI 생성 오류", str(e), []
+
+def summarize_article_for_ppt(content):
+    """
+    긴 기사 내용을 PPT용 3~5줄 개조식(bullet points)으로 요약합니다.
+    여러 모델을 순차적으로 시도하여 성공 확률을 높입니다.
+    """
+    models_to_try = ['gemini-3.0-flash-preview', 'gemini-2.0-flash-exp', 'gemini-1.5-flash']
+    
+    prompt = f"""
+    다음 학교 소식 기사를 파워포인트 슬라이드에 넣을 수 있도록 3~5개의 핵심 문장으로 요약해주세요.
+    
+    [규칙]
+    1. 각 문장은 명사형으로 끝내거나 '~함', '~임' 등으로 간결하게 끝내주세요.
+    2. 이모지를 적절히 사용하여 시각적으로 지루하지 않게 해주세요.
+    3. 전체 내용은 5줄을 넘지 않게 해주세요.
+    4. 결과는 오직 요약된 문장들만 줄바꿈으로 구분하여 반환하세요. (기타 멘트 생략)
+    
+    [기사 내용]
+    {content}
+    """
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            # 텍스트를 줄 단위로 분리하여 리스트로 반환
+            lines = [line.strip().replace('* ', '').replace('- ', '') for line in response.text.split('\n') if line.strip()]
+            if lines: # 결과가 있으면 반환
+                return lines
+        except Exception as e:
+            print(f"⚠️ [PPT AI 요약] 모델 {model_name} 실패: {str(e)}")
+            continue # 다음 모델 시도
+
+    # 모든 모델 실패 시
+    print(f"❌ [PPT AI 요약] 모든 모델 시도 실패.")
+    return [content[:100] + "... (내용이 길어 요약에 실패했습니다. 원문을 확인해주세요.)"]
 
 # ==========================================
 # 3. 로직: 카드뉴스 생성 엔진 (Pillow)
@@ -510,194 +531,7 @@ class CardNewsEngine:
             
         canvas.paste(img, (int(rx), int(ry)))
 
-# ==========================================
-# 3. 로직: PDF 생성 엔진
-# ==========================================
-class PDFEngine(FPDF):
-    def __init__(self, theme_name, school_name):
-        super().__init__()
-        self.theme = THEMES[theme_name]
-        self.school_name = school_name
-        self.add_font("NanumGothic", "", FONT_PATH)
-        # 상단 여백을 25mm로 설정하여 헤더(15mm)와 겹침 방지
-        self.set_margins(10, 25, 10)
-        self.set_auto_page_break(auto=True, margin=20)
-        
-    def header(self):
-        # 표지(1페이지)가 아닐 때만 헤더 표시
-        if self.page_no() > 1:
-            try:
-                # 배경 상자 (항상 페이지 최상단 0~15mm 위치)
-                self.set_fill_color(*self.theme["main"])
-                self.rect(0, 0, 210, 15, 'F')
-                
-                self.set_font("NanumGothic", "", 10)
-                self.set_text_color(255, 255, 255)
-                header_text = f"{self.school_name} 소식지"
-                self.text(12, 10, header_text)
-            except: pass
 
-    def footer(self):
-        if self.page_no() > 1:
-            self.set_y(-15)
-            self.set_font("NanumGothic", "", 8)
-            self.set_text_color(150, 150, 150)
-            self.cell(0, 10, f'- {self.page_no()} -', align='C')
-
-    def draw_cover(self):
-        self.add_page()
-        # 표지는 상단 여백을 무시하고 전체 배경색 칠함
-        self.set_fill_color(*self.theme["sub"])
-        self.rect(0, 0, 210, 297, 'F')
-        
-        self.set_y(100)
-        self.set_font("NanumGothic", "", 42)
-        self.set_text_color(*self.theme["main"])
-        self.cell(190, 30, self.school_name, align='C', ln=True)
-        
-        self.set_y(130)
-        self.set_font("NanumGothic", "", 22)
-        self.set_text_color(70, 70, 70)
-        now = datetime.datetime.now()
-        self.cell(190, 20, f"{now.year}학년도 {now.month}월 뉴스레터", align='C', ln=True)
-        
-        self.set_draw_color(*self.theme["accent"])
-        self.set_line_width(1.5)
-        self.line(60, 155, 150, 155)
-
-    def calculate_article_height(self, article):
-        """기사의 높이를 합산하여 반환"""
-        h = 0
-        self.set_font("NanumGothic", "", 16)
-        title_lines = len(self.multi_cell(190, 10, str(article['title']), split_only=True))
-        h += (title_lines * 10) + 10
-        
-        imgs_raw = article.get('images', '[]')
-        imgs = json.loads(imgs_raw) if isinstance(imgs_raw, str) else imgs_raw
-        if imgs:
-            cnt = len(imgs)
-            if cnt == 1: h += 95
-            elif cnt <= 4: h += 140
-        
-        self.set_font("NanumGothic", "", 11)
-        content_lines = len(self.multi_cell(190, 7, str(article['content']), split_only=True))
-        h += (content_lines * 7) + 25
-        return h
-
-    def add_article(self, article):
-        """본문 길이에 따라 사진 크기를 미세 조정하는 스마트 스케일링 적용"""
-        h_no_img = self.calculate_article_height({**article, 'images': '[]'})
-        imgs_raw = article.get('images', '[]')
-        imgs = json.loads(imgs_raw) if isinstance(imgs_raw, str) else imgs_raw
-        
-        # 텍스트가 너무 길면 이미지를 좀 더 작게 조절 (기본 1.0 -> 0.7)
-        scaling = 1.0
-        if h_no_img > 150: # 본문이 페이지의 절반 이상을 차지하면
-            scaling = 0.8
-        
-        h_final = self.calculate_article_height(article)
-        if self.get_y() + h_final > 275:
-            self.add_page()
-        
-        # 제목
-        self.set_x(10)
-        self.set_font("NanumGothic", "", 16)
-        self.set_text_color(*self.theme["main"])
-        self.multi_cell(190, 10, str(article.get('title', '')))
-        self.ln(3)
-        
-        # 이미지 그리드 (스케일링 적용)
-        if imgs:
-            self.render_image_grid(imgs, scaling=scaling)
-            self.ln(5)
-
-        # 본문
-        self.set_x(10)
-        self.set_font("NanumGothic", "", 11)
-        self.set_text_color(30, 30, 30)
-        self.multi_cell(190, 7, str(article.get('content', '')))
-        self.ln(15)
-
-    def render_image_grid(self, imgs, scaling=1.0):
-        cnt = len(imgs)
-        try:
-            if cnt == 1:
-                w = 140 * scaling
-                x = (210 - w) / 2
-                self.image(imgs[0], x=x, w=w)
-            elif cnt == 2:
-                w = 92 * scaling
-                curr_y = self.get_y()
-                self.image(imgs[0], x=10, y=curr_y, w=w)
-                self.image(imgs[1], x=108, y=curr_y, w=w)
-                self.set_y(curr_y + (70 * scaling))
-            elif cnt == 3:
-                w_big = 110 * scaling
-                w_small = 92 * scaling
-                self.image(imgs[0], x=(210-w_big)/2, w=w_big)
-                self.ln(5)
-                curr_y = self.get_y()
-                self.image(imgs[1], x=10, y=curr_y, w=w_small)
-                self.image(imgs[2], x=108, y=curr_y, w=w_small)
-                self.set_y(curr_y + (65 * scaling))
-            else:
-                w = 92 * scaling
-                curr_y = self.get_y()
-                self.image(imgs[0], x=10, y=curr_y, w=w)
-                self.image(imgs[1], x=108, y=curr_y, w=w)
-                self.ln(65 * scaling)
-                new_y = self.get_y()
-                self.image(imgs[2], x=10, y=new_y, w=w)
-                self.image(imgs[3], x=108, y=new_y, w=w)
-                self.set_y(new_y + (65 * scaling))
-        except: pass
-
-# ==========================================
-# 4. 로직: Word 생성 엔진 (통합 본)
-# ==========================================
-def generate_docx_newsletter(articles, school_name, theme_name):
-    from docx.shared import RGBColor
-    theme = THEMES[theme_name]
-    doc = Document()
-    
-    # 테마 색상 (제목용)
-    main_color = RGBColor(*theme["main"])
-    
-    # 표지
-    title = doc.add_heading(f'{school_name} 뉴스레터', 0)
-    title.alignment = 1 
-    
-    now = datetime.datetime.now()
-    p = doc.add_paragraph(f"{now.year}학년도 {now.month}월 소식")
-    p.alignment = 1
-    
-    doc.add_page_break()
-
-    for art in articles:
-        # 기사 제목 (테마 색상 적용)
-        h = doc.add_heading(str(art.get('title', '제목 없음')), level=1)
-        for run in h.runs:
-            run.font.color.rgb = main_color
-        
-        # 이미지 
-        imgs_raw = art.get('images', '[]')
-        imgs = json.loads(imgs_raw) if isinstance(imgs_raw, str) else imgs_raw
-        if imgs:
-            for img_p in imgs:
-                try:
-                    if os.path.exists(img_p):
-                        doc.add_picture(img_p, width=doc.sections[0].page_width * 0.7)
-                        doc.paragraphs[-1].alignment = 1
-                except: pass
-        
-        # 본문
-        doc.add_paragraph(str(art.get('content', '')))
-        doc.add_page_break()
-        
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
 
 # ==========================================
 # 5. UI (Streamlit)
@@ -744,10 +578,8 @@ def main():
         st.markdown("---")
         st.header("📂 기록 보관소")
         
-        try:
-            df_archive = pd.read_csv(DATA_FILE, encoding='utf-8-sig')
-        except:
-            df_archive = pd.DataFrame()
+        history_list = DB.get_all_articles()
+        df_archive = pd.DataFrame(history_list)
 
         st.write(f"총 {len(df_archive)}건의 기록이 있습니다.")
         
@@ -755,39 +587,74 @@ def main():
         
         with tab_search:
             if not df_archive.empty:
+                # Option format updated for SQLite dict results
                 selection = st.selectbox("과거 기록 조회", 
-                                       options=df_archive.index,
+                                       options=range(len(df_archive)),
                                        format_func=lambda x: f"[{df_archive.iloc[x]['date']}] {df_archive.iloc[x]['event_name']}")
                 if st.button("기록 보기", key="view_btn"):
-                    st.session_state.current_view = df_archive.iloc[selection].to_dict()
+                    st.session_state.current_view = history_list[selection]
             else:
                 st.info("기록이 없습니다.")
         
         with tab_batch:
             if not df_archive.empty:
-                selected_indices = st.multiselect("뉴스레터로 만들 기사 선택", 
-                                            options=df_archive.index,
+                selected_indices = st.multiselect("뉴스레터로 만들 기사 선택 (신문형은 3~5개 권장)", 
+                                            options=range(len(df_archive)),
                                             format_func=lambda x: f"{df_archive.iloc[x]['event_name']}")
                 
-                if st.button("🚀 뉴스레터(PDF+Word) 통합 생성", use_container_width=True, type="primary"):
+                format_type = st.radio("📰 발행 스타일", ["Booklet (기사별 1페이지)", "Newspaper (A4 신문 1장)"], horizontal=True)
+                
+                use_ai_summary = st.checkbox("✨ PPT용 AI 자동 요약 사용 (긴 글을 핵심만 3줄 요약)", value=True)
+                
+                with st.expander("🔧 수동 생성을 위한 프롬프트 복사 (API 미사용 시)"):
                     if selected_indices:
-                        with st.spinner("두 가지 형식의 문서를 준비 중입니다..."):
-                            articles = df_archive.iloc[selected_indices].to_dict('records')
+                        copy_text = "다음 학교 소식들을 파워포인트 슬라이드용 내용을 요약해줘.\n\n"
+                        for idx in selected_indices:
+                            item = history_list[idx]
+                            copy_text += f"[제목: {item['event_name']}]\n내용: {item['content']}\n\n"
+                        st.code(copy_text, language="text")
+                        st.caption("위 내용을 복사해서 ChatGPT나 Gemini 채팅창에 붙여넣어보세요!")
+                    else:
+                        st.info("먼저 기사를 선택해주세요.")
+
+                if st.button("🚀 뉴스레터(PDF+Word+PPT) 통합 생성", use_container_width=True, type="primary"):
+                    if not selected_indices:
+                        st.warning("먼저 기사를 선택해주세요.")
+                    else:
+                        with st.spinner("문서를 제작하고 있습니다..."):
+                            articles = [history_list[i] for i in selected_indices]
                             
                             # 1. PDF 생성
                             pdf = PDFEngine(selected_theme, school_name)
-                            pdf.draw_cover()
-                            pdf.add_page()
-                            for art in articles:
-                                pdf.add_article(art)
+                            if format_type == "Newspaper (A4 신문 1장)":
+                                pdf.add_newspaper_page(articles)
+                            else:
+                                pdf.draw_cover()
+                                for art in articles:
+                                    pdf.add_article(art, is_booklet=True)
                             pdf_data = bytes(pdf.output(dest='S'))
                             
                             # 2. Word 생성
-                            docx_buffer = generate_docx_newsletter(articles, school_name, selected_theme)
+                            word_engine = WordEngine(selected_theme, school_name)
+                            docx_buffer = word_engine.generate(articles)
                             
-                            # 성공 후 세션에 저장하여 표시
+                            # 3. PPT 생성 (AI 요약 포함)
+                            ppt_articles = []
+                            for art in articles:
+                                art_copy = art.copy()
+                                if use_ai_summary:
+                                    summary_lines = summarize_article_for_ppt(art_copy.get('content', ''))
+                                    art_copy['content'] = summary_lines
+                                ppt_articles.append(art_copy)
+                                
+                            ppt_engine = PPTEngine(selected_theme, school_name)
+                            ppt_buffer = ppt_engine.create_presentation(ppt_articles)
+                            
+                            # 세션 저장
                             st.session_state.ready_pdf = pdf_data
                             st.session_state.ready_docx = docx_buffer
+                            st.session_state.ready_ppt = ppt_buffer
+                            
                             st.success("문서 생성이 완료되었습니다! 아래에서 다운로드하세요.")
 
                 # 생성된 파일이 있으면 다운로드 버튼 표시
@@ -805,9 +672,18 @@ def main():
                                          file_name="newsletter.docx", 
                                          mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
                                          use_container_width=True)
+                    
+                    if 'ready_ppt' in st.session_state:
+                         st.download_button("📥 PPT(발표용) 다운로드",
+                                          data=st.session_state.ready_ppt,
+                                          file_name="presentation.pptx",
+                                          mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                          use_container_width=True)
+
                     if st.button("🔄 새로 만들기", use_container_width=True):
                         del st.session_state.ready_pdf
                         del st.session_state.ready_docx
+                        if 'ready_ppt' in st.session_state: del st.session_state.ready_ppt
                         st.rerun()
             else:
                 st.info("선택할 기록이 없습니다.")
@@ -875,7 +751,16 @@ def main():
                     "tone": tone,
                     "keywords": keywords
                 }
-                title, content, hashtags = generate_article_gemini(api_key, input_data)
+                # Initialize RAG Service if not ready
+                if 'check_rag' not in st.session_state:
+                     try:
+                         # Use a local persistence directory
+                         st.session_state.style_rag = StyleRAGService(persist_directory="./chroma_db_school")
+                         st.session_state.check_rag = True
+                     except:
+                         st.session_state.style_rag = None
+
+                title, content, hashtags = generate_article_gemini(api_key, input_data, st.session_state.get('style_rag'))
                 
                 st.session_state.draft_title = title
                 st.session_state.draft_content = content
@@ -911,6 +796,18 @@ def main():
                         "content": edited_content,
                         "hashtags": [t.strip() for t in edited_tags.split() if t.strip()]
                     })
+                    # Learn Style from User Edits (RAG)
+                    try:
+                        rag = st.session_state.get('style_rag')
+                        if rag and 'draft_content' in st.session_state:
+                            original_ai_content = st.session_state.draft_content
+                            # Only learn if meaningful edit happened (simplistic check)
+                            if len(edited_content) > 10 and edited_content != original_ai_content:
+                                 rag.learn_style(original_ai_content, edited_content, tags=st.session_state.current_input_data['tone'])
+                                 st.toast("✨ 선생님의 스타일을 학습했어요!")
+                    except Exception as e:
+                        pass # Fail silently for user experience
+
                     save_to_archive(final_data, st.session_state.get('draft_images', []))
                     st.toast("저장되었습니다!")
                     del st.session_state.draft_title

@@ -5,3 +5,9 @@ __pycache__/
 archive/
 data.csv
 *.ttf
+chroma_db/
+*.pdf
+*.docx
+*.pptx
+test_output.pptx
+.ipynb_checkpoints/
