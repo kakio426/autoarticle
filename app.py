@@ -97,11 +97,10 @@ def apply_custom_style():
         }
 
         /* 6. 아이콘 보호 및 헤더 클리닝 */
-        [data-testid="stIcon"], i, svg { font-family: inherit !important; }
+        /* [data-testid="stIcon"], i, svg { font-family: inherit !important; } <- 이 코드를 삭제하거나 아래처럼 수정 */
+        [data-testid="stExpander"] svg { font-family: 'Material Icons' !important; } 
         header[data-testid="stHeader"] { background-color: transparent !important; }
-        header[data-testid="stHeader"] * { color: transparent !important; }
-        header[data-testid="stHeader"] svg { fill: var(--primary) !important; }
-
+        
         /* 7. 몽글몽글 버튼 */
         .stButton>button {
             border-radius: var(--radius) !important;
@@ -111,24 +110,23 @@ def apply_custom_style():
             box-shadow: 0 4px 0px #E67E30 !important;
             padding: 0.6rem 2rem !important;
             font-weight: bold !important;
+            width: 100%; /* 버튼 너비 확보 */
         }
         .stButton>button:hover {
             transform: translateY(-2px) !important;
             box-shadow: 0 6px 0px #E67E30 !important;
+            background-color: var(--primary) !important;
+            color: white !important;
         }
 
-        /* 8. 카드 및 사이드바 (색상 복구 중요) */
-        div[data-testid="stVerticalBlock"] > div[style*="border"] {
-            background-color: white !important;
-            border: 1px solid #FFEBB3 !important;
-            border-radius: var(--radius) !important;
-            box-shadow: 0 8px 30px rgba(230, 126, 34, 0.03) !important;
-        }
-
-        /* 푸른색을 지우고 웜 베이지로 복구 */
+        /* 8. 카드 및 사이드바 */
         [data-testid="stSidebar"] {
             background-color: #FFF9E6 !important;
             border-right: 2px solid #FFEBB3 !important;
+        }
+        /* 사이드바 내부 입력창 간격 확보 */
+        [data-testid="stSidebar"] .stVerticalBlock {
+            gap: 1rem !important;
         }
 
         /* 9. [NEW] 전문 기사 포맷 전용 스타일 (Compact) */
