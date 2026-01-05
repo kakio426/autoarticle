@@ -2,6 +2,8 @@ streamlit
 google-generativeai
 fpdf2
 python-docx
+python-pptx
 Pillow
 requests
 pandas
+chromadb

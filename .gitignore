@@ -4,7 +4,7 @@ __pycache__/
 # .streamlit/ (Keep config.toml for themes)
 archive/
 data.csv
-*.ttf
+# *.ttf
 chroma_db/
 *.pdf
 *.docx
