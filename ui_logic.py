@@ -165,7 +165,7 @@ def render_write_mode(api_key, school_name, selected_theme):
         _render_card_preview_area()
 
 
-def render_publish_mode(school_name, selected_theme):
+def render_publish_mode(school_name, selected_theme, api_key=None):
     """
     Renders the Publish Mode (Archive List -> Batch Generation).
     """
@@ -217,7 +217,7 @@ def render_publish_mode(school_name, selected_theme):
             if not selected_indices:
                 st.warning("선택된 기사가 없습니다.")
             else:
-                _generate_newsletters(selected_indices, history_list, selected_theme, school_name, format_type, use_ai_summary)
+                _generate_newsletters(selected_indices, history_list, selected_theme, school_name, format_type, use_ai_summary, api_key)
 
     # Allow clicking to view details
     st.markdown("---")
@@ -242,7 +242,7 @@ def render_publish_mode(school_name, selected_theme):
             c3.download_button("📥 PPT 다운로드", st.session_state.ready_ppt, "presentation.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True)
 
 
-def _generate_newsletters(selected_indices, history_list, selected_theme, school_name, format_type, use_ai_summary):
+def _generate_newsletters(selected_indices, history_list, selected_theme, school_name, format_type, use_ai_summary, api_key=None):
     with st.spinner("문서를 제작하고 있습니다..."):
         # indices are from df.iterrows(), so they match history_list index IF history_list same order.
         # But df was Sorted Descending!
@@ -278,7 +278,7 @@ def _generate_newsletters(selected_indices, history_list, selected_theme, school
         for art in articles:
             art_copy = art.copy()
             if use_ai_summary:
-                summary_lines = summarize_article_for_ppt(art_copy.get('content', ''))
+                summary_lines = summarize_article_for_ppt(art_copy.get('content', ''), api_key=api_key)
                 art_copy['content'] = summary_lines
             ppt_articles.append(art_copy)
             

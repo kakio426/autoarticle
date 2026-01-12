@@ -71,11 +71,17 @@ def generate_article_gemini(api_key, topic_data, style_service=None):
     except Exception as e:
         return f"AI 생성 오류", str(e), []
 
-def summarize_article_for_ppt(content):
+def summarize_article_for_ppt(content, api_key=None):
     """
     긴 기사 내용을 PPT용 3~5줄 개조식(bullet points)으로 요약합니다.
     """
-    models_to_try = ['gemini-3.0-flash-preview', 'gemini-2.0-flash-exp', 'gemini-1.5-flash']
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+        except: pass
+
+    # Prioritize Stable Models
+    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-3.0-flash-preview']
     
     prompt = f"""
     다음 학교 소식 기사를 파워포인트 슬라이드에 넣을 수 있도록 3~5개의 핵심 문장으로 요약해주세요.
@@ -89,6 +95,8 @@ def summarize_article_for_ppt(content):
     [기사 내용]
     {content}
     """
+    
+    last_error = ""
 
     for model_name in models_to_try:
         try:
@@ -98,8 +106,15 @@ def summarize_article_for_ppt(content):
             if lines:
                 return lines
         except Exception as e:
-            print(f"⚠️ [PPT AI 요약] 모델 {model_name} 실패: {str(e)}")
+            last_error = str(e)
+            print(f"⚠️ [PPT AI 요약] 모델 {model_name} 실패: {last_error}")
             continue 
 
-    print(f"❌ [PPT AI 요약] 모든 모델 시도 실패.")
+    print(f"❌ [PPT AI 요약] 모든 모델 시도 실패. Last Error: {last_error}")
+    
+    # Fallback with error hint if possible, or just truncation
+    # Return a single line that explains the error cleanly to the user if it's a quota issue
+    if "429" in last_error or "Quota" in last_error:
+        return [content[:50] + "...", "(⚠️ API 사용량 초과로 요약 불가)"]
+        
     return [content[:100] + "... (내용이 길어 요약에 실패했습니다. 원문을 확인해주세요.)"]

@@ -236,7 +236,7 @@ def main():
     if mode == "📝 기사 작성":
         render_write_mode(api_key, school_name, selected_theme)
     else:
-        render_publish_mode(school_name, selected_theme)
+        render_publish_mode(school_name, selected_theme, api_key)
 
 if __name__ == "__main__":
     main()
