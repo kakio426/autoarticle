@@ -4,6 +4,7 @@ import os
 from engines.constants import THEMES
 from engines.db_service import DatabaseService
 from ui_logic import render_write_mode, render_publish_mode
+from demo_tour import render_demo_button, start_demo_mode, render_tour_overlay, init_tour_state
 
 # Initial Setup / Migration
 DATA_FILE = "article_archive.csv"
@@ -13,23 +14,25 @@ if os.path.exists(DATA_FILE):
 def apply_custom_style():
     st.markdown("""
         <style>
-        @import url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_two@1.0/NanumSquareRound.woff');
-        
+        /* 1. 기본 배경 및 시스템 폰트 설정 */
         :root {
             --primary: #FF8C42;
             --bg: #FFFBF0;
             --text: #4A4A4A;
             --radius: 16px;
             --input-radius: 12px;
+            --font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'sans-serif';
         }
 
-        /* 1. 기본 배경 */
-        .stApp { background-color: var(--bg) !important; }
+        .stApp { 
+            background-color: var(--bg) !important; 
+            font-family: var(--font-family) !important;
+        }
 
         /* 2. 텍스트 요소 통합 관리 */
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, .stCaption, 
         .stButton button, .stCheckbox label span, [data-baseweb="select"] * {
-            font-family: 'NanumSquareRound', sans-serif !important;
+            font-family: var(--font-family) !important;
             color: var(--text) !important;
         }
 
@@ -182,6 +185,14 @@ def main():
     st.set_page_config(layout="wide", page_title="AI School Story", page_icon="🎨")
     
     with st.sidebar:
+        # Initialize tour state
+        init_tour_state()
+        
+        # Demo button at the top
+        if render_demo_button():
+            start_demo_mode()
+            st.rerun()
+        
         st.header("⚙️ 설정 (Settings)")
         api_key = st.text_input("Gemini API Key", type="password")
         
@@ -193,18 +204,34 @@ def main():
                 st.error(f"API 키 설정 오류: {e}")
         else:
             st.warning("⚠️ API 키를 입력해야 기능을 사용할 수 있습니다.")
-            with st.expander("🔑 API 키 발급 및 비용 안내", expanded=False):
+            with st.expander("🔑 API 키 발급 방법 (클릭해서 펼치기)", expanded=False):
                 st.markdown("""
-                이 시스템은 Google의 **Gemini 3 Flash** AI 모델을 사용하여 기사와 카드뉴스를 생성합니다.
+                ### 📌 Gemini API 키란?
+                이 시스템은 Google의 **Gemini AI**를 사용합니다.  
+                API 키는 AI 서비스를 사용하기 위한 **비밀번호** 같은 것입니다.
                 
-                **1. 어디서 가져오나요?**
-                - [Google AI Studio](https://aistudio.google.com/app/apikey)에서 누구나 구글 계정으로 즉시 발급 가능합니다.
+                ---
                 
-                **2. 비용이 드나요?**
-                - **아니오, 무료입니다.** (개인 개발/교육 목적 무료 티어)
+                ### ✅ 발급 방법 (3분 소요)
                 
-                **3. 얼마나 쓸 수 있나요?**
-                - **분당 15회 / 하루 1,500회** (넉넉함)
+                **1단계: Google AI Studio 접속**
+                - 👉 [aistudio.google.com/apikey](https://aistudio.google.com/app/apikey) 클릭
+                - 구글 계정으로 로그인
+                
+                **2단계: API 키 생성**
+                - "Create API Key" 버튼 클릭
+                - 프로젝트가 없으면 "Create API key in new project" 선택
+                
+                **3단계: 키 복사**
+                - 생성된 키 (AIza로 시작)를 **복사**
+                - 위의 입력창에 **붙여넣기**
+                
+                ---
+                
+                ### 💰 비용 안내
+                - ✅ **완전 무료** (교육/개인 용도)
+                - 📊 하루 1,500회까지 사용 가능
+                - 🔒 키는 본인만 사용하세요
                 """)
 
         school_name = st.text_input("학교명", value="서울디지털초등학교")
@@ -218,7 +245,7 @@ def main():
             st.caption(f"현재 테마: {selected_theme}")
             
         st.markdown("---")
-        mode = st.radio("메뉴 선택", ["📝 기사 작성", "🗂️ 기록 관리 및 발행"])
+        mode = st.radio("메뉴 선택", ["📝 기사 작성", "🗂️ 보관함 및 뉴스레터"])
         
         if st.checkbox("고급 설정"):
             if st.button("DB 리셋"):
@@ -237,6 +264,9 @@ def main():
         render_write_mode(api_key, school_name, selected_theme)
     else:
         render_publish_mode(school_name, selected_theme, api_key)
+    
+    # Render tour overlay if active
+    render_tour_overlay()
 
 if __name__ == "__main__":
     main()
