@@ -4,7 +4,7 @@ import os
 from engines.constants import THEMES
 from engines.db_service import DatabaseService
 from ui_logic import render_write_mode, render_publish_mode
-from demo_tour import render_demo_button, start_demo_mode, render_tour_overlay, init_tour_state
+from demo_tour import init_demo_mode, render_sidebar_demo_button, render_demo_guide_banner, is_demo_active
 
 # Initial Setup / Migration
 DATA_FILE = "article_archive.csv"
@@ -184,14 +184,12 @@ def apply_custom_style():
 def main():
     st.set_page_config(layout="wide", page_title="AI School Story", page_icon="🎨")
     
+    # Initialize demo mode
+    init_demo_mode()
+    
     with st.sidebar:
-        # Initialize tour state
-        init_tour_state()
-        
         # Demo button at the top
-        if render_demo_button():
-            start_demo_mode()
-            st.rerun()
+        render_sidebar_demo_button()
         
         st.header("⚙️ 설정 (Settings)")
         api_key = st.text_input("Gemini API Key", type="password")
@@ -259,14 +257,15 @@ def main():
                  except: pass
 
     apply_custom_style()
+    
+    # Render demo guide banner at the top of main content
+    render_demo_guide_banner()
 
     if mode == "📝 기사 작성":
         render_write_mode(api_key, school_name, selected_theme)
     else:
         render_publish_mode(school_name, selected_theme, api_key)
-    
-    # Render tour overlay if active
-    render_tour_overlay()
 
 if __name__ == "__main__":
     main()
+
