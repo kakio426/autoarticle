@@ -4,7 +4,7 @@ import os
 from engines.constants import THEMES
 from engines.db_service import DatabaseService
 from ui_logic import render_write_mode, render_publish_mode
-from demo_tour import init_demo_mode, render_sidebar_demo_button, render_demo_guide_banner, is_demo_active
+from demo_tour import init_demo_mode, render_sidebar_demo_button
 
 # Initial Setup / Migration
 DATA_FILE = "article_archive.csv"
@@ -243,23 +243,40 @@ def main():
             st.caption(f"현재 테마: {selected_theme}")
             
         st.markdown("---")
-        mode = st.radio("메뉴 선택", ["📝 기사 작성", "🗂️ 보관함 및 뉴스레터"])
+        
+        # 메뉴 선택 (데모 모드일 때 자동 선택)
+        from demo_tour import get_required_menu, is_demo_active
+        
+        menu_options = ["📝 기사 작성", "🗂️ 보관함 및 뉴스레터"]
+        default_idx = 0
+        
+        if is_demo_active():
+            required = get_required_menu()
+            if required == "🗂️ 보관함 및 뉴스레터":
+                default_idx = 1
+        
+        mode = st.radio("메뉴 선택", menu_options, index=default_idx)
         
         if st.checkbox("고급 설정"):
             if st.button("DB 리셋"):
-                 # Simple Reset Logic
                  try:
                      os.remove("articles.db")
                      from engines.db_service import DatabaseService
-                     DatabaseService() # Re-init
+                     DatabaseService()
                      st.warning("데이터가 초기화되었습니다.")
                      st.rerun()
                  except: pass
 
     apply_custom_style()
     
-    # Render demo guide banner at the top of main content
-    render_demo_guide_banner()
+    # --- 데모 투어 UI ---
+    from demo_tour import render_guide_panel, inject_tour_css
+    
+    # 강조 CSS 주입
+    inject_tour_css()
+    
+    # 안내 패널 표시
+    render_guide_panel()
 
     if mode == "📝 기사 작성":
         render_write_mode(api_key, school_name, selected_theme)
@@ -268,4 +285,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
