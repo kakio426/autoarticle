@@ -182,13 +182,16 @@ def apply_custom_style():
     """, unsafe_allow_html=True)
 
 def main():
-    st.set_page_config(layout="wide", page_title="AI School Story", page_icon="🎨")
+    st.set_page_config(layout="wide", page_title="AIVORY - AI 학교 소식 도우미", page_icon="📝")
     
     # Initialize demo mode
     init_demo_mode()
     
     with st.sidebar:
-        # Demo button at the top
+        # Logo at the top
+        st.image("assets/logo_cropped.png", use_container_width=True)
+        
+        # Demo button
         render_sidebar_demo_button()
         
         st.header("⚙️ 설정 (Settings)")

@@ -115,7 +115,6 @@ def render_sidebar_demo_button():
     
     if not is_demo_active():
         # 시작 버튼
-        st.markdown("---")
         st.markdown("##### 🚀 처음이신가요?")
         if st.button("✨ 튜토리얼 시작", type="primary", use_container_width=True):
             start_demo()
