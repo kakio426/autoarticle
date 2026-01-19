@@ -1,15 +1,14 @@
 # Railway 배포용 설정
-# 1. 파이썬 3.10 버전(가볍고 안정적)을 베이스로 사용합니다.
-FROM python:3.10-slim
+# 1. 파이썬 3.10 버전(안정적인 Debian Bookworm 기반)을 사용합니다.
+FROM python:3.10-slim-bookworm
 
 # 2. 작업 폴더를 설정합니다.
 WORKDIR /app
 
-# 3. 필수 시스템 패키지 설치 (PDF, 이미지 처리 등을 위해 필요할 수 있음)
+# 3. 필수 시스템 패키지 설치
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
     git \
     && rm -rf /var/lib/apt/lists/*
 
