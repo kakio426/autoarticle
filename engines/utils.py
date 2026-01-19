@@ -1,8 +1,7 @@
 import os
 import uuid
 import json
-
-IMAGE_DIR = "uploaded_images"
+from engines.constants import IMAGE_DIR
 
 def ensure_image_dir():
     if not os.path.exists(IMAGE_DIR):

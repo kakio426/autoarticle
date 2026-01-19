@@ -89,9 +89,9 @@ class WordEngine:
 
     def _add_cover_page(self, doc):
         """전문적인 표지 페이지"""
-        # 상단 여백
-        for _ in range(8):
-            doc.add_paragraph()
+        # 상단 여백 - 빈 문단 대신 spacing 사용
+        spacer = doc.add_paragraph()
+        spacer.paragraph_format.space_before = Pt(180)
         
         # 학교명 (대제목)
         title = doc.add_heading(level=0)

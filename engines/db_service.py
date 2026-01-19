@@ -3,10 +3,11 @@ import sqlite3
 import json
 import os
 import uuid
+from engines.constants import DB_PATH
 
 class DatabaseService:
-    def __init__(self, db_path='articles.db'):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        self.db_path = db_path if db_path else DB_PATH
         self._init_db()
 
     def _init_db(self):

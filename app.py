@@ -1,7 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import os
-from engines.constants import THEMES
+from engines.constants import THEMES, DB_PATH
 from engines.db_service import DatabaseService
 from ui_logic import render_write_mode, render_publish_mode
 from demo_tour import init_demo_mode, render_sidebar_demo_button
@@ -263,7 +263,7 @@ def main():
         if st.checkbox("고급 설정"):
             if st.button("DB 리셋"):
                  try:
-                     os.remove("articles.db")
+                     os.remove(DB_PATH)
                      from engines.db_service import DatabaseService
                      DatabaseService()
                      st.warning("데이터가 초기화되었습니다.")

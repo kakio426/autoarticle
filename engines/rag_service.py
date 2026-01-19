@@ -2,16 +2,18 @@
 
 import os
 import uuid
+from engines.constants import CHROMA_PATH
 
 class StyleRAGService:
-    def __init__(self, persist_directory="./chroma_db"):
+    def __init__(self, persist_directory=None):
+        self.persist_directory = persist_directory if persist_directory else CHROMA_PATH
         try:
             import chromadb
             from chromadb.utils import embedding_functions
         except ImportError:
             raise ImportError("ChromaDB is not installed. Please install it to use Style RAG.")
             
-        self.client = chromadb.PersistentClient(path=persist_directory)
+        self.client = chromadb.PersistentClient(path=self.persist_directory)
         
         # Use default local embedding (Sentence Transformers)
         self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()

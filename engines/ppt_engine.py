@@ -140,9 +140,14 @@ class PPTEngine:
                 p.space_after = Pt(10)
                 p.level = 0
         else: # Raw text case
-            # Just dump text for now, AI will improve this later
+            # Truncate long text for PPT readability
             p = tf.add_paragraph()
-            p.text = content_text
+            # Check for summary failure message or overly long text
+            if "요약에 실패" in content_text or len(content_text) > 300:
+                truncated = content_text[:300].rsplit(' ', 1)[0] if len(content_text) > 300 else content_text
+                p.text = truncated + "..." if len(content_text) > 300 else content_text
+            else:
+                p.text = content_text
             p.font.size = Pt(18)
             p.font.name = "Malgun Gothic"
             
