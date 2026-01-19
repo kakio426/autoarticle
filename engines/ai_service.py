@@ -1,16 +1,48 @@
 import google.generativeai as genai
 import re
+import time
+from collections import deque
+
+# --- 설정 ---
+# 절대 변경 금지: 선생님 요청 모델명
+FIXED_MODEL_NAME = "gemini-3-flash-preview"
+
+# Rate Limiter (5분에 2회 제한)
+# deque를 사용하여 타임스탬프를 저장 (최대 2개까지만 유지하면 충분하지만 넉넉히)
+# 사용자별 구분을 하고 싶지만, Streamlit 특성상 전역 변수는 리셋되므로
+# 단순하게 모듈 레벨 변수로 관리 (단일 인스턴스 기준)
+_usage_timestamps = deque()
+
+def check_rate_limit(limit_count=2, limit_seconds=300):
+    """
+    최근 limit_seconds(초) 내에 사용 횟수가 limit_count를 넘었는지 확인.
+    넘었으면 True(제한됨), 아니면 False(사용 가능) 반환.
+    """
+    now = time.time()
+    
+    # 오래된 기록 제거
+    while _usage_timestamps and _usage_timestamps[0] < now - limit_seconds:
+        _usage_timestamps.popleft()
+        
+    if len(_usage_timestamps) >= limit_count:
+        return True
+    
+    _usage_timestamps.append(now)
+    return False
 
 def generate_article_gemini(api_key, topic_data, style_service=None):
-    if not api_key:
-        return "API 키가 필요합니다.", "사이드바에 API 키를 입력해주세요.", []
+    # 하이브리드 로직: 사용자가 직접 입력한 키가 아니고, 환경변수 키를 쓰는 경우에만 제한
+    is_using_master_key = not api_key # api_key 인자가 비어서 넘어오는 경우 (나중에 처리)
     
-    # genai.configure is handled globally in main(), but we can re-ensure if needed?
-    # For now, we assume main() called it.
+    # [제한 체크]
+    # 실제로는 app.py에서 마스터 키를 주입해서 넘기겠지만, 
+    # 여기서는 Rate Limit 호출 시점만 잡습니다.
+    # 만약 '특정 조건'에서만 제한을 걸고 싶다면 인자를 더 받아야 합니다.
+    # 일단은 단순하게: 호출될 때마다 카운트
     
+    # 모델명 절대 고정
     try:
-        # 최신 고성능 Flash 모델 설정
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel(FIXED_MODEL_NAME)
         
         # Style RAG Injection
         style_prompt = ""
@@ -80,8 +112,8 @@ def summarize_article_for_ppt(content, api_key=None):
             genai.configure(api_key=api_key)
         except: pass
 
-    # Prioritize Stable Models
-    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-3.0-flash-preview']
+    # 절대 변경 금지: 선생님 요청 모델명만 사용
+    models_to_try = [FIXED_MODEL_NAME]
     
     prompt = f"""
     다음 학교 소식 기사를 파워포인트 슬라이드에 넣을 수 있도록 3~5개의 핵심 문장으로 요약해주세요.
@@ -100,6 +132,9 @@ def summarize_article_for_ppt(content, api_key=None):
 
     for model_name in models_to_try:
         try:
+            # Rate Limit 체크 (요약도 횟수 차감에 포함할지? 보통 생성 위주라 일단 둠)
+            # 여기서는 PPT 생성이므로 횟수 차감은 선택사항인데, 엄격하게 하려면 check_rate_limit() 호출 필요
+            
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             lines = [line.strip().replace('* ', '').replace('- ', '') for line in response.text.split('\n') if line.strip()]

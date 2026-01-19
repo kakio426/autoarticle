@@ -195,16 +195,28 @@ def main():
         render_sidebar_demo_button()
         
         st.header("⚙️ 설정 (Settings)")
-        api_key = st.text_input("Gemini API Key", type="password")
         
-        # [Fix] Global API Configuration to prevent crash on PPT generation
-        if api_key:
+        # [Hybrid API Key Logic]
+        # 1. 환경변수에 있는 마스터 키를 가져옵니다.
+        master_api_key = os.environ.get("GEMINI_API_KEY")
+        user_api_key = st.text_input("Gemini API Key (선택사항)", type="password", help="키를 입력하지 않으면 기본 제공되는 무료 사용량을 이용합니다.")
+        
+        # 2. 실제 사용할 키 결정
+        final_api_key = user_api_key if user_api_key else master_api_key
+        
+        # 3. 마스터 키 사용 중일 때 안내 표시
+        if not user_api_key and master_api_key:
+            st.success("✅ 무료 제공 API 키 사용 중! (편하게 쓰세요)")
+            st.caption("※ 사용량이 많으면 본인 키 입력을 요청드릴 수 있습니다.")
+        
+        # [Fix] Global API Configuration
+        if final_api_key:
             try:
-                genai.configure(api_key=api_key)
+                genai.configure(api_key=final_api_key)
             except Exception as e:
                 st.error(f"API 키 설정 오류: {e}")
         else:
-            st.warning("⚠️ API 키를 입력해야 기능을 사용할 수 있습니다.")
+            st.warning("⚠️ API 키가 필요합니다.")
             with st.expander("🔑 API 키 발급 방법 (클릭해서 펼치기)", expanded=False):
                 st.markdown("""
                 ### 📌 Gemini API 키란?
@@ -282,9 +294,9 @@ def main():
     render_guide_panel()
 
     if mode == "📝 기사 작성":
-        render_write_mode(api_key, school_name, selected_theme)
+        render_write_mode(final_api_key, school_name, selected_theme)
     else:
-        render_publish_mode(school_name, selected_theme, api_key)
+        render_publish_mode(school_name, selected_theme, final_api_key)
 
 if __name__ == "__main__":
     main()

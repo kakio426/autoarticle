@@ -18,7 +18,8 @@ from engines.rag_service import StyleRAGService
 from engines.db_service import DatabaseService
 from engines.constants import THEMES
 from engines.card_engine import CardNewsEngine
-from engines.ai_service import generate_article_gemini, summarize_article_for_ppt
+from engines.card_engine import CardNewsEngine
+from engines.ai_service import generate_article_gemini, summarize_article_for_ppt, check_rate_limit
 from engines.utils import save_article_with_images, IMAGE_DIR
 
 # Database Service Instance (Singleton-like usage)
@@ -91,6 +92,20 @@ def render_write_mode(api_key, school_name, selected_theme):
         elif not event_name or not keywords:
             st.warning("행사명과 주요 내용을 입력해주세요.")
         else:
+            # [Rate Limit Check]
+            # 마스터 키(환경변수)를 사용 중인지 확인
+            master_key = os.environ.get("GEMINI_API_KEY")
+            # 사용자가 입력한 키가 마스터 키와 같으면(즉, 무료 제공 사용 중이면) 제한 적용
+            # (주의: 로컬 테스트 등에서 master_key가 None이면 건너뜀)
+            if master_key and api_key == master_key:
+                if check_rate_limit(limit_count=2, limit_seconds=300):
+                    st.error("🚫 무료 사용량 제한 (5분에 2회)에 도달했습니다!")
+                    st.markdown("""
+                    **잠시 쉬었다가 다시 시도해주세요.**  
+                    또는 사이드바에 **본인 API 키**를 입력하면 제한 없이 사용 가능합니다.
+                    """)
+                    return # 중단
+
             with st.spinner("Gemini 3 Flash가 최신 기사를 작성 중입니다..."):
                 input_data = {
                     "school": school_name,
