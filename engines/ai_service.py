@@ -75,7 +75,15 @@ def generate_article_gemini(api_key, topic_data, style_service=None):
         6. 선정적이거나 부정적인 표현은 배제하고 긍정적인 교육적 가치를 강조하세요.
         """
         
-        response = model.generate_content(prompt)
+        # Safety Settings (과민 반응 차단 방지)
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
+        response = model.generate_content(prompt, safety_settings=safety_settings)
         text = response.text
         
         # 파싱
@@ -135,8 +143,16 @@ def summarize_article_for_ppt(content, api_key=None):
             # Rate Limit 체크 (요약도 횟수 차감에 포함할지? 보통 생성 위주라 일단 둠)
             # 여기서는 PPT 생성이므로 횟수 차감은 선택사항인데, 엄격하게 하려면 check_rate_limit() 호출 필요
             
+            # Safety Settings
+            safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
+            
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            response = model.generate_content(prompt, safety_settings=safety_settings)
             lines = [line.strip().replace('* ', '').replace('- ', '') for line in response.text.split('\n') if line.strip()]
             if lines:
                 return lines
